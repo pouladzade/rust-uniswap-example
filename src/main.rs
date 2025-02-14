@@ -164,10 +164,43 @@ fn convert_amount(amount: &BigInt, decimals: u32) -> String {
 	let factor = ten.pow(decimals);
 	let (quotient, remainder) = amount.div_rem(&factor);
 
-	if remainder.is_negative() {
-		let rem = -&remainder;
-		format!("{}.{:0>width$}", quotient, rem, width = decimals as usize)
-	} else {
-		format!("{}.{:0>width$}", quotient, remainder, width = decimals as usize)
+	if remainder.is_zero() {
+		return quotient.to_string(); // No decimals if remainder is zero
+	}
+
+	// Convert remainder to string, removing trailing zeros
+	let remainder_str = remainder.abs().to_string();
+	let trimmed_remainder = remainder_str.trim_end_matches('0');
+
+	format!("{}.{}", quotient, trimmed_remainder)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use num_traits::ToPrimitive;
+
+	#[test]
+	fn test_ethereum_int_to_bigint_positive() {
+		let value = ethereum_types::U256::from(1000u64);
+		let result = ethereum_int_to_bigint(&value);
+		assert_eq!(result.to_i64().unwrap(), 1000);
+	}
+
+	#[test]
+	fn test_ethereum_int_to_bigint_negative() {
+		// For a 256-bit integer, -1 is represented as 2^256 - 1.
+		let max = ethereum_types::U256::max_value();
+		let result = ethereum_int_to_bigint(&max);
+		assert_eq!(result, BigInt::from(-1));
+	}
+
+	#[test]
+	fn test_convert_amount() {
+		// For example, 1500000000000000000 represented with 18 decimals should be "1.5".
+		let factor = BigInt::from(10).pow(18);
+		let amount = &BigInt::from(15) * &factor / 10;
+		let converted = convert_amount(&amount, 18);
+		assert_eq!(converted, "1.5");
 	}
 }
