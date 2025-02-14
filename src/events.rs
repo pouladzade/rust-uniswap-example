@@ -119,3 +119,48 @@ pub fn print_swap_events(block: &ConfirmedBlock) {
 		);
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use crate::events;
+
+	use super::*;
+	use ethereum_types::U256;
+	use num_bigint::BigInt;
+
+	#[test]
+	fn test_ethereum_int_to_bigint_positive() {
+		let value = U256::from(1000u64);
+		let bigint = events::ethereum_int_to_bigint(&value);
+		assert_eq!(bigint, BigInt::from(1000));
+	}
+
+	#[test]
+	fn test_ethereum_int_to_bigint_negative() {
+		// In two's complement, -50 is represented as 2^256 - 50.
+		let value = U256::max_value() - U256::from(49u64);
+		let bigint = events::ethereum_int_to_bigint(&value);
+		assert_eq!(bigint, BigInt::from(-50));
+	}
+
+	#[test]
+	fn test_convert_amount_no_decimal() {
+		// When the amount is exactly divisible by 10^decimals.
+		let factor = BigInt::from(10u32).pow(18);
+		let amount = BigInt::from(1234) * &factor;
+		let result = events::convert_amount(&amount, 18);
+		// Expect no fractional part if remainder is zero.
+		assert_eq!(result, "1234");
+	}
+
+	#[test]
+	fn test_convert_amount_with_decimal() {
+		// Represent 1.5 as an amount with 18 decimals:
+		// 1.5 * 10^18 = 1500000000000000000.
+		let factor = BigInt::from(10u32).pow(18);
+		let amount = BigInt::from(15) * &factor / BigInt::from(10); // equals 1500000000000000000
+		let result = events::convert_amount(&amount, 18);
+		// With our formatting (trimming trailing zeros), we expect "1.5".
+		assert_eq!(result, "1.5");
+	}
+}
