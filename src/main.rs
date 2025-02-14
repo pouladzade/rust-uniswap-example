@@ -1,14 +1,18 @@
+use anyhow::Context;
+use dotenv::dotenv;
 use futures::StreamExt;
-
+use std::env;
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-	const WEBSOCKET_INFURA_ENDPOINT: &str = "<YOUR OWN INFURA ENDPOINT>";
+	dotenv().ok();
+	let eth_node_url = env::var("INFURA_URL").context("INFURA_URL must be set")?;
+	let eth_pool_address =
+		env::var("USDC_DAI_UNISWAP_POOL_CONTRACT").context("Pool contract address must be set")?;
+	let web3 = web3::Web3::new(web3::transports::ws::WebSocket::new(eth_node_url.as_str()).await?);
 
-	let web3 =
-		web3::Web3::new(web3::transports::ws::WebSocket::new(WEBSOCKET_INFURA_ENDPOINT).await?);
-	let contract_address = web3::types::H160::from_slice(
-		&hex::decode("5777d92f208679db4b9778590fa3cab3ac9e2168").unwrap()[..],
-	);
+	let contract_address =
+		web3::types::H160::from_slice(&hex::decode(eth_pool_address).unwrap()[..]);
+
 	let contract = web3::contract::Contract::from_json(
 		web3.eth(),
 		contract_address,
