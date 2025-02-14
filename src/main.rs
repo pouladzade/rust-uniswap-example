@@ -1,13 +1,13 @@
 use dotenv::dotenv;
 use futures::StreamExt;
-use std::env;
+use std::{collections::BTreeMap, env};
 
 use anyhow::{Context, Result};
 use ethabi::{decode, ethereum_types, ParamType, Token};
 use num_bigint::{BigInt, Sign};
 use num_integer::Integer;
 use num_traits::{FromPrimitive, Signed, Zero};
-use web3::types::{Log, H160, U64};
+use web3::types::{Block, BlockId, BlockNumber, Log, H160, H256, U64};
 
 #[derive(Debug)]
 /// Represents a swap event in a Uniswap-like protocol.
@@ -22,6 +22,7 @@ struct SwapEvent {
 /// A struct representing a confirmed block in the blockchain.
 struct ConfirmedBlock {
 	number: U64,
+	hash: H256,
 	events: Vec<SwapEvent>,
 }
 
@@ -60,26 +61,70 @@ async fn main() -> Result<(), anyhow::Error> {
 		.context("Failed to subscribe to new block headers")?;
 	println!("Block subscription started");
 
+	let mut pending_blocks: BTreeMap<U64, ConfirmedBlock> = BTreeMap::new();
 	while let Some(Ok(block)) = block_stream.next().await {
-		let block_hash = block.hash.context("Received block without hash")?;
-		let block_number = block.number.context("Received block without number")?;
+		let swap_logs_in_block = web3
+			.eth()
+			.logs(
+				web3::types::FilterBuilder::default()
+					.block_hash(block.hash.unwrap())
+					.address(vec![contract_address])
+					.topics(Some(vec![swap_event_signature]), None, None, None)
+					.build(),
+			)
+			.await?;
+		let events = swap_logs_in_block.iter().filter_map(decode_swap_event).collect();
 
-		// Build a filter for the Swap events in this block.
-		let filter = web3::types::FilterBuilder::default()
-			.block_hash(block_hash)
-			.address(vec![contract_address])
-			.topics(Some(vec![swap_event_signature]), None, None, None)
-			.build();
+		let block_number = block.number.unwrap();
+		let confirmed = ConfirmedBlock { number: block_number, hash: block.hash.unwrap(), events };
 
-		let swap_logs = web3.eth().logs(filter).await.context("Failed to fetch logs for block")?;
-		let events = swap_logs.iter().filter_map(decode_swap_event).collect();
+		pending_blocks.insert(block_number, confirmed);
 
-		let confirmed_block = ConfirmedBlock { number: block_number, events };
+		let confirmed_cutoff = block_number - U64::from(5u64);
+		let to_print = check_confirmed_blocks(&web3, &pending_blocks, confirmed_cutoff).await?;
 
-		print_swap_events(&confirmed_block);
+		for block_num in to_print {
+			if let Some(cb) = pending_blocks.remove(&block_num) {
+				print_swap_events(&cb);
+			}
+		}
 	}
-
 	Ok(())
+}
+
+async fn fetch_block(
+	web3: &web3::Web3<web3::transports::WebSocket>,
+	block_number: U64,
+) -> Result<Option<Block<H256>>> {
+	web3.eth()
+		.block(BlockId::Number(BlockNumber::Number(block_number)))
+		.await
+		.context("Failed to fetch block")
+}
+
+async fn check_confirmed_blocks(
+	web3: &web3::Web3<web3::transports::WebSocket>,
+	pending_blocks: &BTreeMap<U64, ConfirmedBlock>,
+	confirmed_cutoff: U64,
+) -> Result<Vec<U64>> {
+	let mut to_print = Vec::new();
+	for (&block_num, pending_block) in pending_blocks.iter() {
+		if block_num <= confirmed_cutoff {
+			if let Some(fetched_block) = fetch_block(web3, block_num).await? {
+				if fetched_block.hash != Some(pending_block.hash) {
+					eprintln!(
+						"Reorganisation detected at block {}. Expected hash: {:?}, got: {:?}",
+						block_num, pending_block.hash, fetched_block.hash
+					);
+					eprintln!("Reorg depth greater than 5 detected. Exiting.");
+					std::process::exit(1);
+				} else {
+					to_print.push(block_num);
+				}
+			}
+		}
+	}
+	Ok(to_print)
 }
 
 fn decode_swap_event(log: &Log) -> Option<SwapEvent> {
