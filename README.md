@@ -1,4 +1,4 @@
-# rust-uniswap
+# rust-uniswap-example
 
 ## Overview
 
